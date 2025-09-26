@@ -13,19 +13,28 @@ class TimeTask
     private:
         uint64_t _id; // task id
         uint32_t _timeout; // timeout
+        bool _canceled; // whether the task is canceled
         TaskFunc _task_cb; // task callback function
         ReleaseFunc _release; // Used to delete timer object information stored in TimerWheel
     public:
         TimeTask(uint64_t id, uint32_t delay, const TaskFunc& cb)
-            : _id(id), _timeout(delay), _task_cb(cb) 
+            : _id(id), _timeout(delay), _task_cb(cb), _canceled(false)
         {
 
         }
 
         ~TimeTask() 
         {
-            _task_cb();
+            if (_canceled == false)
+            {
+                _task_cb();
+            }
             _release();
+        }
+
+        void Cancel() 
+        {
+            _canceled = true;
         }
 
         void SetRelease(const ReleaseFunc& cb) 
@@ -69,7 +78,7 @@ class TimeWheel
         void TimerAdd(uint64_t id, uint32_t delay, const TaskFunc& cb)
         {
             PtrTask pt(new TimeTask(id, delay, cb));
-            pt->SetRelease(std::bind(RemoveTimer, this, id));
+            pt->SetRelease(std::bind(&TimeWheel::RemoveTimer, this, id));
             int pos = (_tick + delay) % _capacity;
             _wheel[pos].push_back(pt);
             _timers[id] = WeakTask(pt);
@@ -91,6 +100,19 @@ class TimeWheel
             int delay = pt->DelayTime();
             int pos = (_tick + delay) % _capacity;
             _wheel[pos].push_back(pt);
+        }
+
+        void TimerCancel(uint64_t id)
+        {
+            auto it = _timers.find(id);
+            if (it == _timers.end()) 
+            {
+                // Timer not found
+                return;
+            }
+
+            PtrTask pt = it->second.lock(); // Convert weak_ptr to shared_ptr
+            pt->Cancel();
         }
 
         // This function executes once per second, 
@@ -136,6 +158,7 @@ int main()
         sleep(1);
     }
 
+    tw.TimerCancel(888); // Cancel the timer task
     while (1) {
         sleep(1);
         std::cout << "tick " << std::endl;
