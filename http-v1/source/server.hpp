@@ -8,6 +8,28 @@
 #include <string>
 #include <cstring>
 #include <ctime>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <fcntl.h>
+
+#define INFO 0
+#define DEBUG 1
+#define ERROR 2
+#define LOG_LEVEL DEBUG
+#define LOG(level, format, ...) do{\
+    if (level < LOG_LEVEL) break;\
+    time_t t = time(NULL);\
+    struct tm *ltm = localtime(&t);\
+    char tmp[32] = {0};\
+    strftime(tmp, 31, "%H:%M:%S", ltm);\
+    fprintf(stdout, "[%s %s:%d] " format "\n", tmp, __FILE__, __LINE__, ##__VA_ARGS__);\
+}while(0)
+#define INFO_LOG(format, ...) LOG(INFO, format, ##__VA_ARGS__)
+#define DEBUG_LOG(format, ...) LOG(DEBUG, format, ##__VA_ARGS__)
+#define ERROR_LOG(format, ...) LOG(ERROR, format, ##__VA_ARGS__)
 
 #define BUFFER_DEFAULT_SIZE 1024
 class Buffer
@@ -183,8 +205,203 @@ class Buffer
             _writer_idx = 0;
         }
 
+};
 
+#define MAX_LISTEN 1024
+class Socket
+{
+    private:
+        int _sockfd;
+    public:
+        Socket()
+            : _sockfd(-1)
+        {}
+        Socket(int sockfd)
+            : _sockfd(sockfd)
+        {}
+        ~Socket()
+        {
+            if (_sockfd != -1) {
+                Close();
+            }
+        }
 
+        int Fd()
+        {
+            return _sockfd;
+        }
+        // create socket
+        bool Create()
+        {
+            // int socket(int domain, int type, int protocol);
+            _sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            if (_sockfd < 0) {
+                ERROR_LOG("create socket error");
+                return false;
+            }
+            return true;
+        }
+        // bind address information
+        bool Bind(const std::string& ip, uint16_t port)
+        {
+            struct sockaddr_in addr;
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(port);
+            addr.sin_addr.s_addr = inet_addr(ip.c_str());
+            socklen_t len = sizeof(addr);
+            // int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+            int ret = bind(_sockfd, (struct sockaddr*)&addr, len);
+            if (ret < 0) {
+                ERROR_LOG("bind socket error");
+                return false;
+            }
+            return true;
+        }
+        // listen
+        bool Listen(int backlog = MAX_LISTEN)
+        {
+            // int listen(int sockfd, int backlog);
+            int ret = listen(_sockfd, backlog);
+            if (ret < 0) {
+                ERROR_LOG("listen socket error");
+                return false;
+            }
+            return true;
+        }
+        // initiate a connection to the server
+        bool Connect(const std::string& ip, uint16_t port)
+        {
+            struct sockaddr_in addr;
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(port);
+            addr.sin_addr.s_addr = inet_addr(ip.c_str());
+            socklen_t len = sizeof(addr);
+            // int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+            int ret = connect(_sockfd, (struct sockaddr*)&addr, len);
+            if (ret < 0) {
+                ERROR_LOG("connect socket error");
+                return false;
+            }
+            return true;
+        }
+        // obtain new connection
+        int Accept()
+        {
+            // int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+            int connfd = accept(_sockfd, nullptr, nullptr);
+            if (connfd < 0) {
+                ERROR_LOG("accept socket error");
+                return -1;
+            }
+            return connfd;
+        }
+        // recv data
+        ssize_t Recv(void* buf, size_t len, int flag = 0)
+        {
+            // ssize_t recv(int sockfd, void *buf, size_t len, int flags);
+            ssize_t ret = recv(_sockfd, buf, len, flag);
+            if (ret <= 0) {
+                // EAGAIN: The socket is set to non-blocking and there is no data available at the moment.
+                // EINTR: The call was interrupted by a signal before any data was received.
+                if (errno  == EAGAIN || errno == EINTR)
+                {
+                    return 0; // No data available now, try again later
+                }
+                return -1;
+            }
+            return ret;
+        }
+
+        ssize_t NonBlockRecv(void* buf, size_t len, int flag = 0)
+        {
+            return Recv(buf, len, MSG_DONTWAIT);
+        }
+
+        // send data
+        ssize_t Send(const void* buf, size_t len, int flag = 0)
+        {
+            // ssize_t send(int sockfd, const void *buf, size_t len, int flags);
+            ssize_t ret = send(_sockfd, buf, len, flag);
+            if (ret <= 0) {
+                ERROR_LOG("send socket error");
+                return -1;
+            }
+            return ret; // return the number of bytes sent
+        }
+
+        ssize_t NonBlockSend(const void* buf, size_t len, int flag = 0)
+        {
+            return Send(buf, len, MSG_DONTWAIT);
+        }
+        // close socket
+        void Close()
+        {
+            if (_sockfd != -1) {
+                close(_sockfd);
+                _sockfd = -1;
+            }
+        }
+        // create a server-side connection
+        bool CreateServer(uint16_t port, const std::string& ip = "0.0.0.0", bool block_flag = false)
+        {
+            // Create socket
+            if (!Create()) {
+                return false;
+            }
+            // Set Non-blocking
+            if (block_flag) 
+            {
+                NonBlock();
+            }
+
+            // Bind address information
+            if (!Bind(ip, port)) {
+                return false;
+            }
+            // Listen
+            if (!Listen()) {
+                return false;
+            }
+            // Set reuse address
+            ReuseAddr();
+            return true;
+        }
+        // create a client-side connection
+        bool CreateClient(uint16_t port, const std::string& ip, bool block_flag = false)
+        {
+            // Create socket
+            if (!Create()) {
+                return false;
+            }
+            // Set Non-blocking
+            if (block_flag)
+            {
+                NonBlock();
+            }
+            // Connect to server
+            if (!Connect(ip, port)) {
+                return false;
+            }
+            return true;
+        }
+        // set socket options - enable address port reuse
+        void ReuseAddr()
+        {
+            // int setsockopt(int sockfd, int level, int optname,
+            //                const void *optval, socklen_t optlen);
+            int val = 1;
+            setsockopt(_sockfd, SOL_SOCKET, SO_REUSEADDR, (void*)&val, sizeof(int));
+            val = 1;
+            setsockopt(_sockfd, SOL_SOCKET, SO_REUSEPORT, (void*)&val, sizeof(int));
+        }
+        // set socket blocking attribute - set to non-blocking
+        void NonBlock()
+        {
+            // int flags = fcntl(sockfd, F_GETFL, 0);
+            // fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+            int flags = fcntl(_sockfd, F_GETFL, 0);
+            fcntl(_sockfd, F_SETFL, flags | O_NONBLOCK);
+        }
 
 };
 

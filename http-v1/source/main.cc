@@ -1,20 +1,6 @@
 #include "server.hpp"
 
-#define INFO 0
-#define DEBUG 1
-#define ERROR 2
-#define LOG_LEVEL INFO
-#define LOG(level, format, ...) do{\
-    if (level < LOG_LEVEL) break;\
-    time_t t = time(NULL);\
-    struct tm *ltm = localtime(&t);\
-    char tmp[32] = {0};\
-    strftime(tmp, 31, "%H:%M:%S", ltm);\
-    fprintf(stdout, "[%s %s:%d] " format "\n", tmp, __FILE__, __LINE__, ##__VA_ARGS__);\
-}while(0)
-#define INFO_LOG(format, ...) LOG(INFO, format, ##__VA_ARGS__)
-#define DEBUG_LOG(format, ...) LOG(DEBUG, format, ##__VA_ARGS__)
-#define ERROR_LOG(format, ...) LOG(ERROR, format, ##__VA_ARGS__)
+
 
 int main()
 {
