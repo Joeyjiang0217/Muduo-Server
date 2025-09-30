@@ -6,6 +6,7 @@
 #include <cassert>
 #include <iostream>
 #include <string>
+#include <functional>
 #include <cstring>
 #include <ctime>
 #include <unistd.h>
@@ -14,6 +15,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <fcntl.h>
+#include <sys/epoll.h>
 
 #define INFO 0
 #define DEBUG 1
@@ -405,6 +407,122 @@ class Socket
 
 };
 
+class Channel
+{
+    private:
+        int _fd; // associated fd
+        uint32_t _events; // interested events
+        uint32_t _revents; // returned events
+        using EventCallback = std::function<void()>;
+        EventCallback _read_callback; // read event callback
+        EventCallback _write_callback; // write event callback
+        EventCallback _error_callback; // error event callback
+        EventCallback _close_callback; // close event callback
+        EventCallback _event_callback; // other event callback
+    public:
+        Channel(int fd)
+            : _fd(fd), _events(0), _revents(0)
+        {};
+
+        int Fd()
+        {
+            return _fd;
+        }
+
+        void SetRevents(uint32_t revt)
+        {
+            _revents = revt;
+        }
+
+        void SetReadCallback(const EventCallback& cb)
+        {
+            _read_callback = cb;
+        }
+        void SetWriteCallback(const EventCallback& cb)
+        {
+            _write_callback = cb;
+        }
+        void SetErrorCallback(const EventCallback& cb)
+        {
+            _error_callback = cb;
+        }
+        void SetCloseCallback(const EventCallback& cb)
+        {
+            _close_callback = cb;
+        }
+        void SetEventCallback(const EventCallback& cb)
+        {
+            _event_callback = cb;
+        }
+        bool Readable()      // Has the readable file been monitored?
+        {
+            return _events & EPOLLIN;
+        }
+        bool Writable()      // Has the writable file been monitored?
+        {
+            return _events & EPOLLOUT;
+        }
+        void EnableRead()    // Enable monitoring for readable events
+        {
+            _events |= EPOLLIN;
+        }
+        void EnableWrite()   // Enable monitoring for writable events
+        {
+            _events |= EPOLLOUT;
+        }
+        void DisableRead()   // Disable monitoring for readable events
+        {
+            _events &= ~EPOLLIN;
+        }
+        void DisableWrite()  // Disable monitoring for writable events
+        {
+            _events &= ~EPOLLOUT;
+        }
+        void DisableAll()    // Disable monitoring for all events
+        {
+            _events = 0;
+        }
+        void Remove()        // Remove from epoll
+        {
+        }
+        void HandleEvent() // handle events
+        {
+            if ( (_revents & EPOLLIN) || 
+                 (_revents & EPOLLRDHUP) || 
+                 (_revents & EPOLLPRI))
+            {
+                if (_read_callback) _read_callback();
+                if (_event_callback) _event_callback();
+            }
+
+            //Process only one operation event at a time that may release a connection.
+            if (_revents & EPOLLOUT)
+            {
+                if (_write_callback) _write_callback();
+                if (_event_callback) _event_callback(); // Call after the event has been processed to refresh it.
+            }
+            else if (_revents & EPOLLERR)
+            {
+                if (_event_callback) _event_callback();
+                // Once an error occurs, the connection is released,
+                // so the event_callback must be called first.
+                if (_error_callback) _error_callback();
+            }
+            else if (_revents & EPOLLHUP)
+            {
+                if (_event_callback) _event_callback();
+                if (_close_callback) _close_callback();
+            }
+
+
+        }
+
+};
+
+class Connection
+{
+
+};
 
 
 
